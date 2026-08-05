@@ -67,7 +67,8 @@ def procesar_llamadas_para_tabla(lista_llamadas):
     tags_permitidos = {
         "Ventas - Acepta oferta",
         "Ventas - Acepta Oferta - Whatsapp",
-        "Ventas - Acepta Oferta - Digital"
+        "Ventas - Acepta Oferta - Digital",
+        "Ventas - Acepta Digital Ventas Orgánico"
     }
     
     llamadas_procesadas = []
