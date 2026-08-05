@@ -44,7 +44,6 @@ if st.sidebar.button("🚪 Cerrar Sesión"):
     st.rerun()
 
 # --- Configuración de la API de Aircall ---
-# --- Configuración Segura de la API ---
 API_ID = st.secrets["aircall"]["api_id"]
 API_TOKEN = st.secrets["aircall"]["api_token"]
 BASE_URL = "https://api.aircall.io/v1/calls"
@@ -74,22 +73,18 @@ def procesar_llamadas_para_tabla(lista_llamadas):
     llamadas_procesadas = []
     
     for llamada in lista_llamadas:
-        # 1. Validar Tags
         tags_llamada = [t.get("name") for t in llamada.get("tags", []) if isinstance(t, dict)]
         if not any(tag in tags_permitidos for tag in tags_llamada):
             continue
             
-        # 2. Validar URL de audio
         url_audio = llamada.get("recording") or llamada.get("voicemail")
         if not url_audio:
             continue
             
-        # 3. Formatear Fecha
         timestamp = llamada.get("started_at")
         fecha_llamada = datetime.fromtimestamp(timestamp) if timestamp else datetime.today()
         fecha_formateada = fecha_llamada.strftime("%Y-%m-%d %H:%M:%S")
         
-        # 4. Formatear Cliente y Agente
         numero_crudo = llamada.get("raw_digits", "SinNumero")
         numero_cliente = re.sub(r'\D', '', str(numero_crudo)) or "SinNumero"
         
@@ -108,7 +103,7 @@ def procesar_llamadas_para_tabla(lista_llamadas):
             "Estado": llamada.get("status"),
             "Motivo Pérdida": llamada.get("missed_call_reason") or "N/A",
             "Fecha / Hora Inicio": fecha_formateada,
-            "fecha_dt": fecha_llamada,  # Guardado para la estructura dentro del ZIP
+            "fecha_dt": fecha_llamada,
             "Duración (Seg)": llamada.get("duration", 0),
             "Teléfono Cliente": numero_crudo,
             "Línea Destino": linea_destino,
@@ -135,14 +130,14 @@ def generar_zip_en_memoria(lista_procesada):
             mes = fecha_dt.strftime("%m-%B")
             dia = fecha_dt.strftime("%d")
             
-            # Definir la ruta que tendrán las carpetas DENTRO del ZIP al descomprimirlo
             ruta_dentro_del_zip = os.path.join("Llamadas_Aircall", ano, mes, dia, item["nombre_archivo_descarga"])
             
             try:
                 res = requests.get(item["url_audio"])
                 if res.status_code == 200:
-                    # Se escribe el binario directo en la estructura ZIP sin tocar el disco del servidor
                     zip_file.writestr(ruta_dentro_del_zip, res.content)
+                # Pausa breve opcional para evitar saturar al descargar los audios uno tras otro
+                time.sleep(0.1)
             except Exception as e:
                 st.error(f"Error procesando {item['nombre_archivo_descarga']}: {e}")
                 
@@ -151,7 +146,7 @@ def generar_zip_en_memoria(lista_procesada):
     zip_buffer.seek(0)
     return zip_buffer
 
-# --- Petición a la API de Aircall ---
+# --- Petición a la API de Aircall con manejo anti-error 429 ---
 def obtener_llamadas(desde, hasta):
     todas_las_llamadas = []
     url_actual = BASE_URL
@@ -168,8 +163,16 @@ def obtener_llamadas(desde, hasta):
                 data = response.json()
                 todas_las_llamadas.extend(data.get("calls", []))
                 url_actual = data.get("meta", {}).get("next_page_link")
+                
+                # 🛑 Pausa de 0.3 segundos para respetar los límites de velocidad (Rate Limit) de Aircall
+                time.sleep(0.3)
+                
+            elif response.status_code == 429:
+                st.warning("⚠️ Límite de peticiones alcanzado (Error 429). Esperando 5 segundos para reintentar...")
+                time.sleep(5) # Espera 5 segundos antes de continuar
+                continue # Reintenta la misma página
             else:
-                st.error(f"Error de API: {response.status_code}")
+                st.error(f"Error de API: {response.status_code} - {response.text}")
                 break
         except Exception as e:
             st.error(f"Error de conexión: {e}")
@@ -205,7 +208,6 @@ if st.session_state.datos_tabla:
     
     st.markdown("---")
     
-    # --- BOTÓN DE DESCARGA MASIVA (CREA ZIP Y ENVÍA DIRECTO A NAVEGADOR) ---
     col_descarga, col_vacia = st.columns([2, 3])
     with col_descarga:
         with st.spinner("Preparando archivo ZIP para descarga..."):
@@ -222,7 +224,6 @@ if st.session_state.datos_tabla:
     
     st.markdown("---")
     
-    # --- TABLA DE RESULTADOS ---
     cols_header = st.columns([1.2, 0.9, 0.9, 1.2, 1.6, 0.8, 1.3, 1.5, 1.3, 1.6, 0.5, 2.5, 1.2])
     titulos = ["ID Call", "Dirección", "Estado", "Motivo", "Fecha Inicio", "Duración", "Tel. Cliente", "Línea Destino", "Agente", "Tags", "País", "Reproductor", "Acción"]
     
@@ -245,11 +246,9 @@ if st.session_state.datos_tabla:
         cols_fila[9].write(item["Tags (Etiquetas)"])
         cols_fila[10].write(item["País"])
         
-        # Reproductor de Audio
         with cols_fila[11]:
             st.audio(item["url_audio"], format="audio/mp3")
         
-        # Botón de Descarga Individual directo al ordenador del cliente
         with cols_fila[12]:
             try:
                 @st.cache_data(show_spinner=False)
