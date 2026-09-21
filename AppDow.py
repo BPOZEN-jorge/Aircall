@@ -1,15 +1,17 @@
-import streamlit as st
-import requests
-from requests.auth import HTTPBasicAuth
-from datetime import datetime
-import time
+import io
 import os
 import re
-import io
+import time
 import zipfile
+from datetime import datetime
+
+import requests
+import streamlit as st
+from requests.auth import HTTPBasicAuth
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Monitor y Descargador Aircall", layout="wide")
+
 
 # --- MÓDULO DE AUTENTICACIÓN (LOGIN SOLO CONTRASEÑA) ---
 def verificar_password():
@@ -19,11 +21,11 @@ def verificar_password():
     if not st.session_state.autenticado:
         st.title("🔒 Acceso Restringido")
         st.subheader("Por favor, ingresa la contraseña para continuar")
-        
+
         with st.form("form_login"):
             password_input = st.text_input("Contraseña:", type="password")
             submit_button = st.form_submit_button("Ingresar")
-            
+
             if submit_button:
                 if password_input == st.secrets["auth"]["password"]:
                     st.session_state.autenticado = True
@@ -33,6 +35,7 @@ def verificar_password():
                     st.error("❌ Contraseña incorrecta")
         return False
     return True
+
 
 # Si no está autenticado, detiene la ejecución del resto del script
 if not verificar_password():
@@ -56,11 +59,13 @@ if "datos_tabla" not in st.session_state:
 if "fecha_buscada" not in st.session_state:
     st.session_state.fecha_buscada = None
 
+
 # --- Función para limpiar caracteres no válidos en nombres de archivos ---
 def limpiar_nombre_archivo(texto):
     if not texto:
         return "Desconocido"
-    return re.sub(r'[\\/*?:"<>| ]', '_', str(texto))
+    return re.sub(r'[\\/*?:"<>| ]', "_", str(texto))
+
 
 # --- Función para procesar y estructurar los datos filtrados ---
 def procesar_llamadas_para_tabla(lista_llamadas):
@@ -68,38 +73,53 @@ def procesar_llamadas_para_tabla(lista_llamadas):
         "Ventas - Acepta oferta",
         "Ventas - Acepta Oferta - Whatsapp",
         "Ventas - Acepta Oferta - Digital",
-        "Ventas - Acepta Digital Ventas Orgánico"
+        "Ventas - Acepta Digital Ventas Orgánico",
     }
-    
+
     llamadas_procesadas = []
-    
+
     for llamada in lista_llamadas:
-        tags_llamada = [t.get("name") for t in llamada.get("tags", []) if isinstance(t, dict)]
+        tags_llamada = [
+            t.get("name") for t in llamada.get("tags", []) if isinstance(t, dict)
+        ]
         if not any(tag in tags_permitidos for tag in tags_llamada):
             continue
-            
+
         url_audio = llamada.get("recording") or llamada.get("voicemail")
         if not url_audio:
             continue
-            
+
         timestamp = llamada.get("started_at")
-        fecha_llamada = datetime.fromtimestamp(timestamp) if timestamp else datetime.today()
+        fecha_llamada = (
+            datetime.fromtimestamp(timestamp) if timestamp else datetime.today()
+        )
         fecha_formateada = fecha_llamada.strftime("%Y-%m-%d %H:%M:%S")
-        
+
         numero_crudo = llamada.get("raw_digits", "SinNumero")
-        numero_cliente = re.sub(r'\D', '', str(numero_crudo)) or "SinNumero"
-        
+
+        # Obtener el ID de la llamada
+        id_llamada = llamada.get("id", "SinID")
+
         usuario_obj = llamada.get("user")
-        nombre_usuario = usuario_obj.get("name", "SinAgente") if usuario_obj and isinstance(usuario_obj, dict) else "SinAgente"
+        nombre_usuario = (
+            usuario_obj.get("name", "SinAgente")
+            if usuario_obj and isinstance(usuario_obj, dict)
+            else "SinAgente"
+        )
         nombre_usuario_limpio = limpiar_nombre_archivo(nombre_usuario)
-        
-        nombre_archivo = f"{numero_cliente}-{nombre_usuario_limpio}.mp3"
-        
+
+        # Nombre del archivo cambiando el teléfono por el ID de llamada
+        nombre_archivo = f"{id_llamada}-{nombre_usuario_limpio}.mp3"
+
         linea_obj = llamada.get("number", {})
-        linea_destino = linea_obj.get("name", "Sin Línea") if isinstance(linea_obj, dict) else "Sin Línea"
-        
+        linea_destino = (
+            linea_obj.get("name", "Sin Línea")
+            if isinstance(linea_obj, dict)
+            else "Sin Línea"
+        )
+
         registro = {
-            "ID Call": llamada.get("id"),
+            "ID Call": id_llamada,
             "Dirección": llamada.get("direction"),
             "Estado": llamada.get("status"),
             "Motivo Pérdida": llamada.get("missed_call_reason") or "N/A",
@@ -109,81 +129,104 @@ def procesar_llamadas_para_tabla(lista_llamadas):
             "Teléfono Cliente": numero_crudo,
             "Línea Destino": linea_destino,
             "Agente Asignado": nombre_usuario,
-            "Tags (Etiquetas)": ", ".join(tags_llamada) if tags_llamada else "Sin Tags",
+            "Tags (Etiquetas)": (
+                ", ".join(tags_llamada) if tags_llamada else "Sin Tags"
+            ),
             "País": llamada.get("country_code_a2", "N/A"),
             "url_audio": url_audio,
-            "nombre_archivo_descarga": nombre_archivo
+            "nombre_archivo_descarga": nombre_archivo,
         }
         llamadas_procesadas.append(registro)
-        
+
     return llamadas_procesadas
+
 
 # --- Función para empaquetar archivos en un archivo ZIP directamente en memoria ---
 def generar_zip_en_memoria(lista_procesada):
     zip_buffer = io.BytesIO()
     total_items = len(lista_procesada)
     bar_progreso = st.progress(0)
-    
+
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for idx, item in enumerate(lista_procesada):
             fecha_dt = item["fecha_dt"]
             ano = fecha_dt.strftime("%Y")
             mes = fecha_dt.strftime("%m-%B")
             dia = fecha_dt.strftime("%d")
-            
-            ruta_dentro_del_zip = os.path.join("Llamadas_Aircall", ano, mes, dia, item["nombre_archivo_descarga"])
-            
+
+            ruta_dentro_del_zip = os.path.join(
+                "Llamadas_Aircall",
+                ano,
+                mes,
+                dia,
+                item["nombre_archivo_descarga"],
+            )
+
             try:
                 res = requests.get(item["url_audio"])
                 if res.status_code == 200:
                     zip_file.writestr(ruta_dentro_del_zip, res.content)
-                # Pausa breve opcional para evitar saturar al descargar los audios uno tras otro
                 time.sleep(0.1)
             except Exception as e:
-                st.error(f"Error procesando {item['nombre_archivo_descarga']}: {e}")
-                
+                st.error(
+                    f"Error procesando {item['nombre_archivo_descarga']}: {e}"
+                )
+
             bar_progreso.progress((idx + 1) / total_items)
-            
+
     zip_buffer.seek(0)
     return zip_buffer
+
 
 # --- Petición a la API de Aircall con manejo anti-error 429 ---
 def obtener_llamadas(desde, hasta):
     todas_las_llamadas = []
     url_actual = BASE_URL
     params = {"from": desde, "to": hasta, "order": "desc", "per_page": 50}
-    
+
     while url_actual:
         try:
             if url_actual == BASE_URL:
-                response = requests.get(url_actual, auth=HTTPBasicAuth(API_ID, API_TOKEN), params=params)
+                response = requests.get(
+                    url_actual,
+                    auth=HTTPBasicAuth(API_ID, API_TOKEN),
+                    params=params,
+                )
             else:
-                response = requests.get(url_actual, auth=HTTPBasicAuth(API_ID, API_TOKEN))
-                
+                response = requests.get(
+                    url_actual, auth=HTTPBasicAuth(API_ID, API_TOKEN)
+                )
+
             if response.status_code == 200:
                 data = response.json()
                 todas_las_llamadas.extend(data.get("calls", []))
                 url_actual = data.get("meta", {}).get("next_page_link")
-                
-                # 🛑 Pausa de 0.3 segundos para respetar los límites de velocidad (Rate Limit) de Aircall
                 time.sleep(0.3)
-                
+
             elif response.status_code == 429:
-                st.warning("⚠️ Límite de peticiones alcanzado (Error 429). Esperando 5 segundos para reintentar...")
-                time.sleep(5) # Espera 5 segundos antes de continuar
-                continue # Reintenta la misma página
+                st.warning(
+                    "⚠️ Límite de peticiones alcanzado (Error 429). Esperando"
+                    " 5 segundos para reintentar..."
+                )
+                time.sleep(5)
+                continue
             else:
-                st.error(f"Error de API: {response.status_code} - {response.text}")
+                st.error(
+                    f"Error de API: {response.status_code} - {response.text}"
+                )
                 break
         except Exception as e:
             st.error(f"Error de conexión: {e}")
             break
-            
+
     return todas_las_llamadas
+
 
 # --- Interfaz en Barra Lateral ---
 st.sidebar.header("Filtros de Búsqueda")
-fecha_seleccionada = st.sidebar.date_input("Selecciona una fecha", datetime.today())
+fecha_seleccionada = st.sidebar.date_input(
+    "Selecciona una fecha", datetime.today()
+)
 
 inicio_dia = int(time.mktime(fecha_seleccionada.timetuple()))
 fin_dia = inicio_dia + 86399
@@ -192,49 +235,79 @@ fin_dia = inicio_dia + 86399
 if st.sidebar.button("🔍 Filtrar y Tabular Llamadas"):
     with st.spinner("Buscando y filtrando registros en Aircall..."):
         llamadas_raw = obtener_llamadas(inicio_dia, fin_dia)
-    
+
     if llamadas_raw:
-        st.session_state.datos_tabla = procesar_llamadas_para_tabla(llamadas_raw)
+        st.session_state.datos_tabla = procesar_llamadas_para_tabla(
+            llamadas_raw
+        )
         st.session_state.fecha_buscada = fecha_seleccionada
     else:
         st.session_state.datos_tabla = []
-        st.sidebar.warning(f"⚠️ No se encontraron llamadas en Aircall para el día {fecha_seleccionada}.")
+        st.sidebar.warning(
+            f"⚠️ No se encontraron llamadas en Aircall para el día"
+            f" {fecha_seleccionada}."
+        )
 
 # --- RENDERIZADO DE RESULTADOS ---
 if st.session_state.datos_tabla:
     cantidad_llamadas = len(st.session_state.datos_tabla)
-    
+
     st.write(f"### 📅 Resultados para el día: {st.session_state.fecha_buscada}")
-    st.metric(label="Cantidad de llamadas filtradas (Ventas)", value=cantidad_llamadas)
-    
+    st.metric(
+        label="Cantidad de llamadas filtradas (Ventas)", value=cantidad_llamadas
+    )
+
     st.markdown("---")
-    
+
     col_descarga, col_vacia = st.columns([2, 3])
     with col_descarga:
         with st.spinner("Preparando archivo ZIP para descarga..."):
             zip_audio_data = generar_zip_en_memoria(st.session_state.datos_tabla)
-            
+
             st.download_button(
                 label="📦 Descargar TODAS las llamadas (.ZIP)",
                 data=zip_audio_data,
-                file_name=f"Llamadas_Aircall_{st.session_state.fecha_buscada}.zip",
+                file_name=(
+                    f"Llamadas_Aircall_{st.session_state.fecha_buscada}.zip"
+                ),
                 mime="application/zip",
-                key="descarga_masiva_zip"
+                key="descarga_masiva_zip",
             )
-            st.caption("ℹ️ El ZIP conservará la estructura organizada de carpetas por Año/Mes/Día al descomprimirse en tu equipo.")
-    
+            st.caption(
+                "ℹ️ El ZIP conservará la estructura organizada de carpetas por"
+                " Año/Mes/Día al descomprimirse en tu equipo."
+            )
+
     st.markdown("---")
-    
-    cols_header = st.columns([1.2, 0.9, 0.9, 1.2, 1.6, 0.8, 1.3, 1.5, 1.3, 1.6, 0.5, 2.5, 1.2])
-    titulos = ["ID Call", "Dirección", "Estado", "Motivo", "Fecha Inicio", "Duración", "Tel. Cliente", "Línea Destino", "Agente", "Tags", "País", "Reproductor", "Acción"]
-    
+
+    cols_header = st.columns(
+        [1.2, 0.9, 0.9, 1.2, 1.6, 0.8, 1.3, 1.5, 1.3, 1.6, 0.5, 2.5, 1.2]
+    )
+    titulos = [
+        "ID Call",
+        "Dirección",
+        "Estado",
+        "Motivo",
+        "Fecha Inicio",
+        "Duración",
+        "Tel. Cliente",
+        "Línea Destino",
+        "Agente",
+        "Tags",
+        "País",
+        "Reproductor",
+        "Acción",
+    ]
+
     for col, tit in zip(cols_header, titulos):
         col.markdown(f"**{tit}**")
     st.markdown("---")
-    
+
     for item in st.session_state.datos_tabla:
-        cols_fila = st.columns([1.2, 0.9, 0.9, 1.2, 1.6, 0.8, 1.3, 1.5, 1.3, 1.6, 0.5, 2.5, 1.2])
-        
+        cols_fila = st.columns(
+            [1.2, 0.9, 0.9, 1.2, 1.6, 0.8, 1.3, 1.5, 1.3, 1.6, 0.5, 2.5, 1.2]
+        )
+
         cols_fila[0].write(str(item["ID Call"]))
         cols_fila[1].write(item["Dirección"])
         cols_fila[2].write(item["Estado"])
@@ -246,27 +319,31 @@ if st.session_state.datos_tabla:
         cols_fila[8].write(item["Agente Asignado"])
         cols_fila[9].write(item["Tags (Etiquetas)"])
         cols_fila[10].write(item["País"])
-        
+
         with cols_fila[11]:
             st.audio(item["url_audio"], format="audio/mp3")
-        
+
         with cols_fila[12]:
             try:
+
                 @st.cache_data(show_spinner=False)
                 def descargar_audio_bytes(url):
                     return requests.get(url).content
 
                 audio_bytes = descargar_audio_bytes(item["url_audio"])
-                
+
                 st.download_button(
                     label="📥 Bajar",
                     data=audio_bytes,
                     file_name=item["nombre_archivo_descarga"],
                     mime="audio/mp3",
-                    key=f"dl_{item['ID Call']}"
+                    key=f"dl_{item['ID Call']}",
                 )
             except Exception:
                 st.error("Error")
 
 elif st.session_state.datos_tabla == []:
-    st.info("ℹ️ No hay llamadas con los tags de Ventas específicos para la fecha seleccionada.")
+    st.info(
+        "ℹ️ No hay llamadas con los tags de Ventas específicos para la fecha"
+        " seleccionada."
+    )
