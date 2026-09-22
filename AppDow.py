@@ -63,8 +63,10 @@ if "fecha_buscada" not in st.session_state:
 # --- Función para limpiar caracteres no válidos en nombres de archivos ---
 def limpiar_nombre_archivo(texto):
     if not texto:
-        return "Desconocido"
-    return re.sub(r'[\\/*?:"<>| ]', "_", str(texto))
+        return "SinNumero"
+    # Elimina signos de más (+), espacios y caracteres no aptos para nombres de archivo
+    texto_limpio = re.sub(r"[^\w\d_]", "_", str(texto))
+    return re.sub(r"_+", "_", texto_limpio).strip("_")
 
 
 # --- Función para procesar y estructurar los datos filtrados ---
@@ -91,25 +93,42 @@ def procesar_llamadas_para_tabla(lista_llamadas):
 
         timestamp = llamada.get("started_at")
         fecha_llamada = (
-            datetime.fromtimestamp(timestamp) if timestamp else datetime.today()
+            datetime.fromtimestamp(timestamp)
+            if timestamp
+            else datetime.today()
         )
         fecha_formateada = fecha_llamada.strftime("%Y-%m-%d %H:%M:%S")
 
-        numero_crudo = llamada.get("raw_digits", "SinNumero")
-
-        # Obtener el ID de la llamada
+        # 1. Obtener ID de la llamada
         id_llamada = llamada.get("id", "SinID")
 
+        # 2. Obtener el número de la OTRA persona (Cliente)
+        # Aircall proporciona 'raw_digits' para la contraparte externa
+        numero_cliente = llamada.get("raw_digits")
+
+        # Si no existe en raw_digits, buscar en la estructura interna según la dirección
+        if not numero_cliente:
+            direccion = llamada.get("direction")
+            if direccion == "inbound":
+                # En llamadas entrantes, el cliente está en 'raw_digits' o 'from'
+                numero_cliente = llamada.get("from", "SinNumero")
+            else:
+                # En llamadas salientes, la contraparte es 'to'
+                numero_cliente = llamada.get("to", "SinNumero")
+
+        # Limpiar el número de teléfono para que sea válido en un nombre de archivo
+        telefono_limpio = limpiar_nombre_archivo(numero_cliente)
+
+        # 3. Construir el nuevo nombre de archivo: [ID_LLAMADA]-[TELEFONO_CLIENTE].mp3
+        nombre_archivo = f"{id_llamada}-{telefono_limpio}.mp3"
+
+        # Datos del Agente para la tabla gráfica
         usuario_obj = llamada.get("user")
         nombre_usuario = (
             usuario_obj.get("name", "SinAgente")
             if usuario_obj and isinstance(usuario_obj, dict)
             else "SinAgente"
         )
-        nombre_usuario_limpio = limpiar_nombre_archivo(nombre_usuario)
-
-        # Nombre del archivo cambiando el teléfono por el ID de llamada
-        nombre_archivo = f"{id_llamada}-{nombre_usuario_limpio}.mp3"
 
         linea_obj = llamada.get("number", {})
         linea_destino = (
@@ -126,7 +145,7 @@ def procesar_llamadas_para_tabla(lista_llamadas):
             "Fecha / Hora Inicio": fecha_formateada,
             "fecha_dt": fecha_llamada,
             "Duración (Seg)": llamada.get("duration", 0),
-            "Teléfono Cliente": numero_crudo,
+            "Teléfono Cliente": numero_cliente or "SinNumero",
             "Línea Destino": linea_destino,
             "Agente Asignado": nombre_usuario,
             "Tags (Etiquetas)": (
@@ -134,7 +153,7 @@ def procesar_llamadas_para_tabla(lista_llamadas):
             ),
             "País": llamada.get("country_code_a2", "N/A"),
             "url_audio": url_audio,
-            "nombre_archivo_descarga": nombre_archivo,
+            "nombre_archivo_descarga": nombre_archivo,  # Nombre actualizado
         }
         llamadas_procesadas.append(registro)
 
@@ -262,7 +281,9 @@ if st.session_state.datos_tabla:
     col_descarga, col_vacia = st.columns([2, 3])
     with col_descarga:
         with st.spinner("Preparando archivo ZIP para descarga..."):
-            zip_audio_data = generar_zip_en_memoria(st.session_state.datos_tabla)
+            zip_audio_data = generar_zip_en_memoria(
+                st.session_state.datos_tabla
+            )
 
             st.download_button(
                 label="📦 Descargar TODAS las llamadas (.ZIP)",
