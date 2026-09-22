@@ -60,13 +60,21 @@ if "fecha_buscada" not in st.session_state:
     st.session_state.fecha_buscada = None
 
 
-# --- Función para limpiar caracteres no válidos en nombres de archivos ---
-def limpiar_nombre_archivo(texto):
+# --- Función para limpiar texto genérico (Nombre de asesor) ---
+def limpiar_nombre_asesor(texto):
+    if not texto:
+        return "SinAgente"
+    # Reemplaza caracteres no permitidos en archivos por guion bajo
+    return re.sub(r'[\\/*?:"<>| ]', "_", str(texto))
+
+
+# --- Función para limpiar el número de teléfono (SOLO DÍGITOS) ---
+def limpiar_telefono_solo_digitos(texto):
     if not texto:
         return "SinNumero"
-    # Elimina signos de más (+), espacios y caracteres no aptos para nombres de archivo
-    texto_limpio = re.sub(r"[^\w\d_]", "_", str(texto))
-    return re.sub(r"_+", "_", texto_limpio).strip("_")
+    # Deja únicamente dígitos del 0 al 9 (elimina +, -, espacios, guiones, etc.)
+    digitos = re.sub(r"\D", "", str(texto))
+    return digitos if digitos else "SinNumero"
 
 
 # --- Función para procesar y estructurar los datos filtrados ---
@@ -99,35 +107,32 @@ def procesar_llamadas_para_tabla(lista_llamadas):
         )
         fecha_formateada = fecha_llamada.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 1. Obtener ID de la llamada
+        # 1. ID de la llamada
         id_llamada = llamada.get("id", "SinID")
 
-        # 2. Obtener el número de la OTRA persona (Cliente)
-        # Aircall proporciona 'raw_digits' para la contraparte externa
-        numero_cliente = llamada.get("raw_digits")
-
-        # Si no existe en raw_digits, buscar en la estructura interna según la dirección
-        if not numero_cliente:
-            direccion = llamada.get("direction")
-            if direccion == "inbound":
-                # En llamadas entrantes, el cliente está en 'raw_digits' o 'from'
-                numero_cliente = llamada.get("from", "SinNumero")
-            else:
-                # En llamadas salientes, la contraparte es 'to'
-                numero_cliente = llamada.get("to", "SinNumero")
-
-        # Limpiar el número de teléfono para que sea válido en un nombre de archivo
-        telefono_limpio = limpiar_nombre_archivo(numero_cliente)
-
-        # 3. Construir el nuevo nombre de archivo: [ID_LLAMADA]-[TELEFONO_CLIENTE].mp3
-        nombre_archivo = f"{id_llamada}-{telefono_limpio}.mp3"
-
-        # Datos del Agente para la tabla gráfica
+        # 2. Nombre del Asesor/Agente
         usuario_obj = llamada.get("user")
         nombre_usuario = (
             usuario_obj.get("name", "SinAgente")
             if usuario_obj and isinstance(usuario_obj, dict)
             else "SinAgente"
+        )
+        asesor_limpio = limpiar_nombre_asesor(nombre_usuario)
+
+        # 3. Número de teléfono de la contraparte (Cliente) - SOLO DÍGITOS
+        numero_cliente = llamada.get("raw_digits")
+        if not numero_cliente:
+            direccion = llamada.get("direction")
+            if direccion == "inbound":
+                numero_cliente = llamada.get("from", "SinNumero")
+            else:
+                numero_cliente = llamada.get("to", "SinNumero")
+
+        telefono_solo_digitos = limpiar_telefono_solo_digitos(numero_cliente)
+
+        # 4. Nombre final del archivo: ID - ASESOR - NUMERO.mp3
+        nombre_archivo = (
+            f"{id_llamada}-{asesor_limpio}-{telefono_solo_digitos}.mp3"
         )
 
         linea_obj = llamada.get("number", {})
@@ -153,7 +158,7 @@ def procesar_llamadas_para_tabla(lista_llamadas):
             ),
             "País": llamada.get("country_code_a2", "N/A"),
             "url_audio": url_audio,
-            "nombre_archivo_descarga": nombre_archivo,  # Nombre actualizado
+            "nombre_archivo_descarga": nombre_archivo,
         }
         llamadas_procesadas.append(registro)
 
